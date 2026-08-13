@@ -61,5 +61,12 @@ def delete_task(task_id: str, db: Session) -> None:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Task not found",
         )
+    # Delete related comments first to avoid FK nullify failure
+    from models import ProjectTaskComment
+
+    comments = db.exec(select(ProjectTaskComment).where(ProjectTaskComment.task_id == task_id)).all()
+    for c in comments:
+        db.delete(c)
+
     db.delete(task)
     db.commit()

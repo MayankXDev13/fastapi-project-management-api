@@ -106,5 +106,20 @@ def delete_project(project_id: str, db: Session) -> None:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found",
         )
+    # Delete related members, tasks and comments to avoid FK / NOT NULL failures
+    # (SQLModel Relationships without cascade try to nullify FKs)
+    from models import ProjectTask, ProjectTaskComment
+
+    members = db.exec(select(ProjectMember).where(ProjectMember.project_id == project_id)).all()
+    for m in members:
+        db.delete(m)
+
+    tasks = db.exec(select(ProjectTask).where(ProjectTask.project_id == project_id)).all()
+    for t in tasks:
+        comments = db.exec(select(ProjectTaskComment).where(ProjectTaskComment.task_id == t.id)).all()
+        for c in comments:
+            db.delete(c)
+        db.delete(t)
+
     db.delete(project)
     db.commit()
