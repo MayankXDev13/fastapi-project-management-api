@@ -58,9 +58,12 @@ class User(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
-    
-    verification_tokens: List["VerificationToken"] = Relationship()
-    owned_projects: List["Project"] = Relationship()
+    verification_tokens: List["VerificationToken"] = Relationship(
+        sa_relationship_kwargs={"overlaps": "user"}
+    )
+    owned_projects: List["Project"] = Relationship(
+        sa_relationship_kwargs={"overlaps": "owner"}
+    )
 
 
 
@@ -89,7 +92,9 @@ class VerificationToken(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
-    user: Optional["User"] = Relationship()
+    user: Optional["User"] = Relationship(
+        sa_relationship_kwargs={"overlaps": "verification_tokens"}
+    )
 
 
 
@@ -114,9 +119,15 @@ class Project(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
-    owner: Optional["User"] = Relationship()
-    members: List["ProjectMember"] = Relationship()
-    tasks: List["ProjectTask"] = Relationship()
+    owner: Optional["User"] = Relationship(
+        sa_relationship_kwargs={"overlaps": "owned_projects"}
+    )
+    members: List["ProjectMember"] = Relationship(
+        sa_relationship_kwargs={"overlaps": "project"}
+    )
+    tasks: List["ProjectTask"] = Relationship(
+        sa_relationship_kwargs={"overlaps": "project"}
+    )
 
 
 
@@ -153,7 +164,9 @@ class ProjectMember(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
-    project: Optional["Project"] = Relationship()
+    project: Optional["Project"] = Relationship(
+        sa_relationship_kwargs={"overlaps": "members"}
+    )
     user: Optional["User"] = Relationship()
 
 
@@ -193,8 +206,12 @@ class ProjectTask(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
-    project: Optional["Project"] = Relationship()
-    comments: List["ProjectTaskComment"] = Relationship()
+    project: Optional["Project"] = Relationship(
+        sa_relationship_kwargs={"overlaps": "tasks"}
+    )
+    comments: List["ProjectTaskComment"] = Relationship(
+        sa_relationship_kwargs={"overlaps": "task"}
+    )
 
 
 class ProjectTaskComment(SQLModel, table=True):
@@ -217,5 +234,7 @@ class ProjectTaskComment(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
-    task: Optional["ProjectTask"] = Relationship()
+    task: Optional["ProjectTask"] = Relationship(
+        sa_relationship_kwargs={"overlaps": "comments"}
+    )
     user: Optional["User"] = Relationship()

@@ -81,7 +81,7 @@ class TestAccessToken:
             decode_token(tampered)
 
     def test_wrong_secret_fails(self):
-        token = jwt.encode({"sub": "u1", "exp": datetime.now(timezone.utc) + timedelta(minutes=5)}, "wrong-secret", algorithm=ALGORITHM)
+        token = jwt.encode({"sub": "u1", "exp": datetime.now(timezone.utc) + timedelta(minutes=5)}, "wrong-secret-but-long-enough-for-hs256-32-chars!!", algorithm=ALGORITHM)
         with pytest.raises(jwt.InvalidSignatureError):
             decode_token(token)
 

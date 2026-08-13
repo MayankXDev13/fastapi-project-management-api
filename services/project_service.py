@@ -43,14 +43,10 @@ def get_all_projects(
     page_size: int = 10,
     search: Optional[str] = None,
 ) -> dict:
-    member_subquery = (
-        select(ProjectMember.project_id)
-        .where(ProjectMember.user_id == user_id)
-        .subquery()
-    )
-    query = select(Project).where(Project.id.in_(member_subquery))
+    member_ids = select(ProjectMember.project_id).where(ProjectMember.user_id == user_id)
+    query = select(Project).where(Project.id.in_(member_ids))
     count_query = select(func.count()).select_from(Project).where(
-        Project.id.in_(member_subquery)
+        Project.id.in_(member_ids)
     )
 
     if search:

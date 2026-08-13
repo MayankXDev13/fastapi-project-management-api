@@ -1,5 +1,14 @@
 import os
 import sys
+import warnings
+
+# Suppress noisy warnings that are already fixed in code but still emitted by deps
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=ResourceWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*StarletteDeprecationWarning.*")
+warnings.filterwarnings("ignore", message=".*Using `httpx`.*")
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import pytest
@@ -32,6 +41,7 @@ def engine():
     yield test_engine
 
     SQLModel.metadata.drop_all(test_engine)
+    test_engine.dispose()
     database.engine = orig_db_engine
     middleware.auth_middleware.engine = orig_mw_engine
 
