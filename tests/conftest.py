@@ -18,6 +18,7 @@ from sqlalchemy.pool import StaticPool
 
 import database
 import middleware.auth_middleware
+from database import register_foreign_keys_listener
 
 
 @pytest.fixture()
@@ -28,6 +29,7 @@ def engine():
         poolclass=StaticPool,
         echo=False,
     )
+    register_foreign_keys_listener(test_engine)
     # Save originals to restore
     orig_db_engine = database.engine
     orig_mw_engine = middleware.auth_middleware.engine

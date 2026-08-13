@@ -59,10 +59,10 @@ class User(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now)
 
     verification_tokens: List["VerificationToken"] = Relationship(
-        sa_relationship_kwargs={"overlaps": "user"}
+        sa_relationship_kwargs={"overlaps": "user", "passive_deletes": True}
     )
     owned_projects: List["Project"] = Relationship(
-        sa_relationship_kwargs={"overlaps": "owner"}
+        sa_relationship_kwargs={"overlaps": "owner", "passive_deletes": True}
     )
 
 
@@ -75,6 +75,7 @@ class VerificationToken(SQLModel, table=True):
 
     user_id: str = Field(
         foreign_key="users.id",
+        ondelete="CASCADE",
         index=True
     )
 
@@ -109,6 +110,7 @@ class Project(SQLModel, table=True):
 
     owner_id: str = Field(
         foreign_key="users.id",
+        ondelete="CASCADE",
         index=True
     )
 
@@ -120,13 +122,13 @@ class Project(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now)
 
     owner: Optional["User"] = Relationship(
-        sa_relationship_kwargs={"overlaps": "owned_projects"}
+        sa_relationship_kwargs={"overlaps": "owned_projects", "passive_deletes": True}
     )
     members: List["ProjectMember"] = Relationship(
-        sa_relationship_kwargs={"overlaps": "project"}
+        sa_relationship_kwargs={"overlaps": "project", "passive_deletes": True}
     )
     tasks: List["ProjectTask"] = Relationship(
-        sa_relationship_kwargs={"overlaps": "project"}
+        sa_relationship_kwargs={"overlaps": "project", "passive_deletes": True}
     )
 
 
@@ -147,11 +149,13 @@ class ProjectMember(SQLModel, table=True):
 
     project_id: str = Field(
         foreign_key="projects.id",
+        ondelete="CASCADE",
         index=True
     )
 
     user_id: str = Field(
         foreign_key="users.id",
+        ondelete="CASCADE",
         index=True
     )
 
@@ -165,7 +169,7 @@ class ProjectMember(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now)
 
     project: Optional["Project"] = Relationship(
-        sa_relationship_kwargs={"overlaps": "members"}
+        sa_relationship_kwargs={"overlaps": "members", "passive_deletes": True}
     )
     user: Optional["User"] = Relationship()
 
@@ -179,6 +183,7 @@ class ProjectTask(SQLModel, table=True):
 
     project_id: str = Field(
         foreign_key="projects.id",
+        ondelete="CASCADE",
         index=True
     )
 
@@ -188,12 +193,14 @@ class ProjectTask(SQLModel, table=True):
 
     assigned_to: Optional[str] = Field(
         foreign_key="users.id",
+        ondelete="SET NULL",
         default=None,
         index=True
     )
 
     created_by: str = Field(
         foreign_key="users.id",
+        ondelete="CASCADE",
         index=True
     )
 
@@ -207,10 +214,10 @@ class ProjectTask(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now)
 
     project: Optional["Project"] = Relationship(
-        sa_relationship_kwargs={"overlaps": "tasks"}
+        sa_relationship_kwargs={"overlaps": "tasks", "passive_deletes": True}
     )
     comments: List["ProjectTaskComment"] = Relationship(
-        sa_relationship_kwargs={"overlaps": "task"}
+        sa_relationship_kwargs={"overlaps": "task", "passive_deletes": True}
     )
 
 
@@ -221,11 +228,13 @@ class ProjectTaskComment(SQLModel, table=True):
 
     task_id: str = Field(
         foreign_key="project_tasks.id",
+        ondelete="CASCADE",
         index=True
     )
 
     user_id: str = Field(
         foreign_key="users.id",
+        ondelete="CASCADE",
         index=True
     )
 
@@ -235,6 +244,6 @@ class ProjectTaskComment(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now)
 
     task: Optional["ProjectTask"] = Relationship(
-        sa_relationship_kwargs={"overlaps": "comments"}
+        sa_relationship_kwargs={"overlaps": "comments", "passive_deletes": True}
     )
     user: Optional["User"] = Relationship()

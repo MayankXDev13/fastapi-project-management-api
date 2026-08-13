@@ -53,6 +53,7 @@ def create_task_endpoint(
             "status": body.status,
             "created_by": current_user.id,
         },
+        current_user.id,
         db,
     )
     return _to_response(task)
@@ -64,7 +65,7 @@ def list_tasks(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    return [_to_response(task) for task in get_tasks_for_project(project_id, db)]
+    return [_to_response(task) for task in get_tasks_for_project(project_id, current_user.id, db)]
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
@@ -74,7 +75,7 @@ def get_task_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    task = get_task(task_id, db)
+    task = get_task(task_id, current_user.id, db)
     return _to_response(task)
 
 
@@ -86,7 +87,7 @@ def update_task_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    task = update_task(task_id, body.model_dump(exclude_unset=True), db)
+    task = update_task(task_id, current_user.id, body.model_dump(exclude_unset=True), db)
     return _to_response(task)
 
 
@@ -97,5 +98,5 @@ def delete_task_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    delete_task(task_id, db)
+    delete_task(task_id, current_user.id, db)
     return MessageResponse(message="Task deleted successfully")

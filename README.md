@@ -9,13 +9,14 @@ A clean, production-ready **Project / Task Management REST API** (mini Jira / As
 ## Features
 
 - **Auth**: register → verify email → login (access + opaque refresh token) → refresh rotation → logout → forgot / reset password → `GET/PUT /auth/me` → `PUT /auth/change-password`
-- **Projects**: create / list (paginated + search) / get / update / delete. Owner auto-added as `owner` member.
+- **Projects**: create / list (paginated + search) / get / update / delete / transfer ownership. Owner auto-added as `owner` member.
 - **Tasks**: CRUD under `/projects/{projectId}/tasks` with status `todo | in_progress | review | completed`
 - **Comments**: CRUD under `/projects/{projectId}/tasks/{taskId}/comments`
 - **Members**: list / add / update role (`owner|admin|member|viewer`) / remove under `/projects/{projectId}/members`
+- **Authorization**: project-scoped roles enforced in services — non-members get `404`, members without the role get `403` (see [Permissions](#permissions))
 - **Middleware**: `AuthMiddleware` (Bearer JWT) with public paths bypass
 - **Emails**: via [Resend](https://resend.com) with stub fallback (`[EMAIL STUB]` when `RESEND_API_KEY` missing)
-- **Tests**: 100+ pytest integration + unit tests with in-memory SQLite
+- **Tests**: 150+ pytest integration + unit tests with in-memory SQLite
 
 ---
 
@@ -47,7 +48,9 @@ A clean, production-ready **Project / Task Management REST API** (mini Jira / As
 │   ├── project_service.py
 │   ├── task_service.py
 │   ├── comment_service.py
-│   └── member_service.py
+│   ├── member_service.py
+│   ├── permissions.py      # get_membership_or_404 / require_role helpers
+│   └── user_service.py     # delete_user_cascade (ownership fallback helper)
 ├── utils/
 │   └── auth.py             # bcrypt, JWT (access), sha256 token hashing
 ├── tests/                  # pytest suite (see Testing)
@@ -57,7 +60,8 @@ A clean, production-ready **Project / Task Management REST API** (mini Jira / As
 │   ├── test_projects.py
 │   ├── test_tasks.py
 │   ├── test_comments.py
-│   └── test_members.py
+│   ├── test_members.py
+│   └── test_permissions.py
 ├── requirements.txt
 └── .env
 ```
@@ -174,8 +178,11 @@ Base URL: `http://localhost:8000`
 | GET | `/projects/{projectId}` | Yes | — | `200 ProjectResponse` / `404` |
 | PUT | `/projects/{projectId}` | Yes | `{name?, description?, status?}` | `200 ProjectResponse` |
 | DELETE | `/projects/{projectId}` | Yes | — | `204` / `404` |
+| POST | `/projects/{projectId}/transfer` | Yes | `{user_id}` | `200 ProjectResponse` / `400` self-or-owner-role / `403` |
 
 List is scoped to `ProjectMember` where `user_id == current_user.id`, paginated (`ceil(total/page_size)`), `search` uses `ilike` on `name` and `description`.
+
+`POST /projects/{projectId}/transfer` moves `owner_id` to an existing member, sets the new owner's role to `owner`, and demotes the old owner to `member`. It is the **only** way to change the owner role.
 
 ### Tasks — `/projects/{projectId}/tasks`
 
@@ -206,6 +213,31 @@ List is scoped to `ProjectMember` where `user_id == current_user.id`, paginated 
 | DELETE | `/projects/{projectId}/members/{userId}` | Yes | — | `200 MessageResponse` / `404` |
 
 All non-public routes return `401 {detail: "Not authenticated"}` or `401 {detail: "Invalid or expired token"}` when `Authorization` is missing/invalid.
+
+---
+
+## Permissions
+
+Roles are **project-scoped** (stored on `project_members`). Authentication lives in `AuthMiddleware` (identity); authorization lives in services via `services/permissions.py` (`get_membership_or_404`, `require_role`).
+
+| Action | owner | admin | member | viewer | non-member |
+|---|---|---|---|---|---|
+| View project / tasks / comments / members | ✅ | ✅ | ✅ | ✅ | `404` |
+| Create task | ✅ | ✅ | ✅ | ❌ | `404` |
+| Update / delete task | ✅ | ✅ | ❌ | ❌ | `404` |
+| Post comment | ✅ | ✅ | ✅ | ❌ | `404` |
+| Update / delete comment | ✅ | ✅ | + author | author only | `404` |
+| Add member / change role / remove member | ✅ | ✅ | ❌ | ❌ | `404` |
+| Update project | ✅ | ✅ | ❌ | ❌ | `404` |
+| Transfer ownership | ✅ | ❌ | ❌ | ❌ | `404` |
+| Delete project | ✅ | ❌ | ❌ | ❌ | `404` |
+
+Rules:
+
+- Non-member → `404` (hides the project's existence). Member without permission → `403`.
+- The owner's membership row is immutable — only `POST /projects/{id}/transfer` (owner-only) can change it. Granting/removing the `owner` role through member endpoints returns `400`.
+- `assigned_to` is restricted to project members; removing a member clears their task assignments.
+- Task/comment/member endpoints require membership of the project in the URL path — `404` otherwise.
 
 ---
 
@@ -259,7 +291,7 @@ pytest tests/test_auth.py -v
 pytest -q --tb=short
 ```
 
-**Suite** (`101 tests`):
+**Suite** (`153 tests`):
 
 | File | Coverage |
 |---|---|
@@ -269,6 +301,7 @@ pytest -q --tb=short
 | `tests/test_tasks.py` | create (success/with assignee/401/422), list/get (empty/401/404), update/delete (success/partial/404/401) |
 | `tests/test_comments.py` | create/list/update/delete (success/404/401/422) |
 | `tests/test_members.py` | list (owner/401), add (success/default role/duplicate 409/roles), update role (success/404/401), remove (success/404/401) |
+| `tests/test_permissions.py` | non-member `404` hiding, role matrix per endpoint (403/200), task assignment rules, unassign via `null`, cascade deletes, member-removal unassignment, transfer (success/roles/403/404/400), owner immutability, `delete_user_cascade` units |
 
 Fixtures (`tests/conftest.py`): `engine`, `db_session`, `client` (+ helpers `register_user`, `login_user`, `auth_headers`, `create_project`).
 
@@ -294,7 +327,7 @@ Fixtures (`tests/conftest.py`): `engine`, `db_session`, `client` (+ helpers `reg
 - Put behind `uvicorn` with workers: `uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4`
 - The `on_event("startup")` hook is deprecated in newer FastAPI — migrate to `lifespan` for future versions.
 - Consider adding `alembic` migrations instead of `create_all` for production schema evolution.
-- `AuthMiddleware` currently does not enforce project-level authorization (any authenticated user can `GET/PUT/DELETE` any project/task). Add member/owner checks in services if needed.
+- `database.py` enables `PRAGMA foreign_keys=ON` per connection so FK `ON DELETE CASCADE` (members/tasks/comments) and `ON DELETE SET NULL` (`assigned_to`) are enforced by SQLite. `services/user_service.delete_user_cascade` transfers owned projects on user deletion (highest role, earliest `joined_at`; delete if no members) — wire it up when account deletion is added.
 
 ---
 

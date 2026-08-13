@@ -8,6 +8,7 @@ from schemas.project import (
     CreateProjectRequest,
     PaginatedProjectResponse,
     ProjectResponse,
+    TransferProjectRequest,
     UpdateProjectRequest,
 )
 from services.project_service import (
@@ -15,6 +16,7 @@ from services.project_service import (
     delete_project,
     get_all_projects,
     get_project,
+    transfer_project,
     update_project,
 )
 
@@ -70,7 +72,7 @@ def get_project_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    project = get_project(project_id, db)
+    project = get_project(project_id, current_user.id, db)
     return _to_response(project)
 
 
@@ -81,7 +83,9 @@ def update_project_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    project = update_project(project_id, body.model_dump(exclude_unset=True), db)
+    project = update_project(
+        project_id, current_user.id, body.model_dump(exclude_unset=True), db
+    )
     return _to_response(project)
 
 
@@ -91,4 +95,15 @@ def delete_project_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    delete_project(project_id, db)
+    delete_project(project_id, current_user.id, db)
+
+
+@router.post("/{project_id}/transfer", response_model=ProjectResponse)
+def transfer_project_endpoint(
+    project_id: str,
+    body: TransferProjectRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+):
+    project = transfer_project(project_id, body.user_id, current_user.id, db)
+    return _to_response(project)

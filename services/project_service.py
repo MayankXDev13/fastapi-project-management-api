@@ -6,6 +6,10 @@ from fastapi import HTTPException, status
 from sqlmodel import Session, select, func
 
 from models import Project, ProjectMember, ProjectMemberRole
+from services.permissions import get_membership_or_404, require_role
+
+OWNER = {ProjectMemberRole.owner}
+OWNER_OR_ADMIN = {ProjectMemberRole.owner, ProjectMemberRole.admin}
 
 
 def create_project(
@@ -26,7 +30,8 @@ def create_project(
     return project
 
 
-def get_project(project_id: str, db: Session) -> Project:
+def get_project(project_id: str, user_id: str, db: Session) -> Project:
+    get_membership_or_404(db, project_id, user_id)
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(
@@ -74,8 +79,10 @@ def get_all_projects(
 
 
 def update_project(
-    project_id: str, update_data: dict, db: Session
+    project_id: str, user_id: str, update_data: dict, db: Session
 ) -> Project:
+    require_role(db, project_id, user_id, OWNER_OR_ADMIN)
+
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(
@@ -95,27 +102,57 @@ def update_project(
     return project
 
 
-def delete_project(project_id: str, db: Session) -> None:
+def delete_project(project_id: str, user_id: str, db: Session) -> None:
+    require_role(db, project_id, user_id, OWNER)
+
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found",
         )
-    # Delete related members, tasks and comments to avoid FK / NOT NULL failures
-    # (SQLModel Relationships without cascade try to nullify FKs)
-    from models import ProjectTask, ProjectTaskComment
-
-    members = db.exec(select(ProjectMember).where(ProjectMember.project_id == project_id)).all()
-    for m in members:
-        db.delete(m)
-
-    tasks = db.exec(select(ProjectTask).where(ProjectTask.project_id == project_id)).all()
-    for t in tasks:
-        comments = db.exec(select(ProjectTaskComment).where(ProjectTaskComment.task_id == t.id)).all()
-        for c in comments:
-            db.delete(c)
-        db.delete(t)
-
+    # Related members, tasks and comments are removed via FK ON DELETE CASCADE
     db.delete(project)
     db.commit()
+
+
+def transfer_project(
+    project_id: str, new_owner_id: str, user_id: str, db: Session
+) -> Project:
+    actor_member = require_role(db, project_id, user_id, OWNER)
+
+    if new_owner_id == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is already the project owner",
+        )
+
+    target_member = db.exec(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == new_owner_id,
+        )
+    ).first()
+    if not target_member:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User is not a project member",
+        )
+
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+
+    project.owner_id = new_owner_id
+    target_member.role = ProjectMemberRole.owner
+    actor_member.role = ProjectMemberRole.member
+    project.updated_at = datetime.now(timezone.utc)
+    db.add(project)
+    db.add(target_member)
+    db.add(actor_member)
+    db.commit()
+    db.refresh(project)
+    return project

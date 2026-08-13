@@ -41,6 +41,7 @@ def create_comment_endpoint(
 ):
     comment = create_comment(
         {"task_id": task_id, "user_id": current_user.id, "comment": body.comment},
+        current_user.id,
         db,
     )
     return _to_response(comment)
@@ -53,7 +54,7 @@ def list_comments(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    return [_to_response(comment) for comment in get_comments_for_task(task_id, db)]
+    return [_to_response(comment) for comment in get_comments_for_task(task_id, current_user.id, db)]
 
 
 @router.put("/{comment_id}", response_model=CommentResponse)
@@ -65,7 +66,7 @@ def update_comment_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    comment = update_comment(comment_id, body.model_dump(exclude_unset=True), db)
+    comment = update_comment(comment_id, current_user.id, body.model_dump(exclude_unset=True), db)
     return _to_response(comment)
 
 
@@ -77,5 +78,5 @@ def delete_comment_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    delete_comment(comment_id, db)
+    delete_comment(comment_id, current_user.id, db)
     return MessageResponse(message="Comment deleted successfully")

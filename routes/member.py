@@ -38,7 +38,7 @@ def list_members(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    return [_to_response(member) for member in get_project_members(project_id, db)]
+    return [_to_response(member) for member in get_project_members(project_id, current_user.id, db)]
 
 
 @router.post("", response_model=MemberResponse, status_code=201)
@@ -48,7 +48,7 @@ def add_member_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    member = add_member_to_project(project_id, body.user_id, db, body.role)
+    member = add_member_to_project(project_id, body.user_id, current_user.id, db, body.role)
     return _to_response(member)
 
 
@@ -60,7 +60,7 @@ def update_member_role_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    member = update_member_role(project_id, user_id, body.new_role, db)
+    member = update_member_role(project_id, user_id, current_user.id, body.new_role, db)
     return _to_response(member)
 
 
@@ -71,5 +71,5 @@ def remove_member_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    remove_member_from_project(project_id, user_id, db)
+    remove_member_from_project(project_id, user_id, current_user.id, db)
     return MessageResponse(message="Member removed successfully")

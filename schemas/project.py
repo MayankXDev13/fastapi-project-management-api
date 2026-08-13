@@ -17,6 +17,10 @@ class UpdateProjectRequest(BaseModel):
     status: Optional[ProjectStatus] = None
 
 
+class TransferProjectRequest(BaseModel):
+    user_id: str
+
+
 class ProjectResponse(BaseModel):
     id: str
     name: str
