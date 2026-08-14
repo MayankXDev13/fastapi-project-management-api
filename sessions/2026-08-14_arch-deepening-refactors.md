@@ -95,3 +95,16 @@
 - Tests added: register returns 201 + user/token persist even when the injected mailer raises; forgot-password still 200 with a failing mailer.
 - Hermetic tests: `client` fixture now also overrides get_mailer with FakeMailer by default — a real RESEND_API_KEY in .env made every fixture-less register hit the network (suite hung >20 min); mailer fixture still available for lifecycle inspection.
 - Suite: 279 passed in 3:08.
+
+## Fix: mail delivery must never 500 the request (DONE)
+
+- **Bug report**: POST /auth/register returned 500 — Resend call raised (read timed out, 30s). User + token were already committed; the response should have been 201.
+- **Investigation**: 6-7s per test in the suite (looked like a hang) was NOT a deadlock — every register/forgot test was calling the REAL resend API: .env sets RESEND_API_KEY, and the conftest `client` fixture did not override get_mailer. api.resend.com became unreachable (getaddrinfo hangs) → 6s DNS timeout per call. The 273-test run at 08:45 was fast only because the provider was reachable then.
+- **Fixes**:
+  - `services/auth_service.py` — `_deliver_mail()` wraps the mailer call (try/except, prints `[EMAIL ERROR]` to stderr); used by register_user + forgot_password. The guard lives at the service seam so ANY mailer failure (incl. future impls) cannot 500 a request.
+  - `services/emailer.py` — reverted to the clean version (no redundant try/except; single guard in auth_service).
+  - `tests/conftest.py` — `client` fixture now overrides get_mailer with a FakeMailer by default; tests never touch the network. `mailer` fixture unchanged.
+  - `tests/test_auth.py` — 2 new tests: register/forgot succeed (201) when the mailer raises; token still persisted un-used.
+  - `tests/test_emailer.py` (new) — resend_mailer stub/success paths, `_deliver_mail` swallow + passthrough, register survives raising mailer (201).
+- Suite: 280 passed in 3:08 (was ~3:21 green before; per-test time back to ~0.4s).
+- NOTE: earlier OpenAPI `request` query-param fix (database.py `request: Request` annotation) + 2 security tests are committed (2c8bbbb); stray fastapi_guide.db removed + `*.db` gitignored (bffceaf). Mail fixes above committed by user as f83294c (emailer.py reverted to clean — single guard lives in auth_service._deliver_mail). Unpushed (origin/main behind).
