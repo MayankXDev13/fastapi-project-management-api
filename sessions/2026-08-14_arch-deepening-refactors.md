@@ -87,3 +87,11 @@
 - Fix: `get_session(request: Request)` in database.py.
 - Regression tests in test_security.py: no route may expose a `request` query param; /auth/register has zero parameters + a RegisterRequest body only.
 - Suite: 273 passed (271 + 2).
+
+## Fix: Resend timeout turned /auth/register into a 500 (DONE)
+
+- Symptom: `POST /auth/register` 500 — `resend.Emails.send` timed out (30s read) against api.resend.com; user+token already committed, so the client saw 500 while the account existed.
+- Fix: email delivery is best-effort at the SERVICE boundary — `_deliver_mail()` in auth_service.py wraps the mailer call for both register_user and forgot_password, logging failures to stderr instead of 500-ing the request. (First attempt caught inside resend_mailer only — wrong layer, since the injected Mailer is swappable; moved to the call site.)
+- Tests added: register returns 201 + user/token persist even when the injected mailer raises; forgot-password still 200 with a failing mailer.
+- Hermetic tests: `client` fixture now also overrides get_mailer with FakeMailer by default — a real RESEND_API_KEY in .env made every fixture-less register hit the network (suite hung >20 min); mailer fixture still available for lifecycle inspection.
+- Suite: 279 passed in 3:08.

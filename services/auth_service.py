@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import sys
 
 from fastapi import HTTPException, status
 from sqlmodel import Session, select
@@ -46,6 +47,17 @@ def _create_verification_token(
     return raw_token
 
 
+def _deliver_mail(
+    mailer: Mailer, to: str, token_type: VerificationTokenType, raw_token: str
+) -> None:
+    """Email is best-effort: the user and their token are already committed
+    before this runs, so a delivery failure must not 500 the request."""
+    try:
+        mailer(to=to, token_type=token_type, raw_token=raw_token)
+    except Exception as exc:  # noqa: BLE001 - delivery must never break the request
+        print(f"[EMAIL ERROR] to={to}, type={token_type.value}: {exc}", file=sys.stderr)
+
+
 def register_user(
     email: str,
     password: str,
@@ -66,7 +78,8 @@ def register_user(
             user.id, VerificationTokenType.email_verification, db
         )
 
-    mailer(
+    _deliver_mail(
+        mailer,
         to=email,
         token_type=VerificationTokenType.email_verification,
         raw_token=raw_token,
@@ -184,7 +197,8 @@ def forgot_password(
             user.id, VerificationTokenType.password_reset, db
         )
 
-    mailer(
+    _deliver_mail(
+        mailer,
         to=email,
         token_type=VerificationTokenType.password_reset,
         raw_token=raw_token,

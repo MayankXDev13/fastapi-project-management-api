@@ -24,6 +24,49 @@ class TestRegister:
         assert body["is_email_verified"] is False
         assert "id" in body
 
+    def test_register_succeeds_when_mailer_fails(self, client, db_session):
+        # a Resend outage must not turn registration into a 500 — the account
+        # and its verification token are already committed by the service
+        from main import app
+        from deps import get_mailer
+
+        def _boom(*, to, token_type, raw_token):
+            raise RuntimeError("api.resend.com timed out")
+
+        app.dependency_overrides[get_mailer] = lambda: _boom
+        try:
+            resp = client.post(
+                "/auth/register", json={"email": "boom@b.com", "password": "pass123"}
+            )
+            assert resp.status_code == 201
+        finally:
+            app.dependency_overrides.pop(get_mailer, None)
+
+        user = db_session.exec(select(User).where(User.email == "boom@b.com")).first()
+        assert user is not None
+        token = db_session.exec(
+            select(VerificationToken).where(
+                VerificationToken.user_id == user.id,
+                VerificationToken.type == VerificationTokenType.email_verification,
+            )
+        ).first()
+        assert token is not None and token.used_at is None
+
+    def test_forgot_password_succeeds_when_mailer_fails(self, client):
+        from main import app
+        from deps import get_mailer
+
+        def _boom(*, to, token_type, raw_token):
+            raise RuntimeError("api.resend.com timed out")
+
+        app.dependency_overrides[get_mailer] = lambda: _boom
+        try:
+            client.post("/auth/register", json={"email": "u@b.com", "password": "pass123"})
+            resp = client.post("/auth/forgot-password", json={"email": "u@b.com"})
+            assert resp.status_code == 200
+        finally:
+            app.dependency_overrides.pop(get_mailer, None)
+
     def test_register_duplicate_returns_409(self, client):
         client.post("/auth/register", json={"email": "dup@b.com", "password": "pass123"})
         resp = client.post("/auth/register", json={"email": "dup@b.com", "password": "pass123"})

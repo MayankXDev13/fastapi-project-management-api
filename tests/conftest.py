@@ -56,9 +56,12 @@ class FakeMailer:
 
 @pytest.fixture()
 def client(engine):
-    """TestClient with a test engine on app.state + overridden get_session."""
+    """TestClient with a test engine on app.state + overridden get_session.
+    get_mailer defaults to a FakeMailer so no test ever touches the network —
+    even when a real RESEND_API_KEY is present in the environment."""
     from main import app
     from database import get_session
+    from deps import get_mailer
 
     app.state.engine = engine
 
@@ -67,6 +70,7 @@ def client(engine):
             yield session
 
     app.dependency_overrides[get_session] = _get_session_override
+    app.dependency_overrides[get_mailer] = lambda: FakeMailer()
 
     with TestClient(app) as c:
         yield c
