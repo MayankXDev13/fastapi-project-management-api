@@ -54,3 +54,26 @@ def test_public_routes_stay_public(client):
 def test_unknown_path_returns_404_not_401(client):
     resp = client.get("/no-such-endpoint")
     assert resp.status_code == 404
+
+
+def test_no_route_exposes_a_request_query_param():
+    """Dependencies like get_session(request) must annotate `request: Request` —
+    an unannotated param leaks into the OpenAPI as a required query parameter."""
+    from main import app
+
+    offenders = []
+    for path, methods in app.openapi()["paths"].items():
+        for method, spec in methods.items():
+            for param in spec.get("parameters", []):
+                if param.get("name") == "request":
+                    offenders.append(f"{method.upper()} {path}")
+    assert offenders == [], f"stray 'request' query param on: {offenders}"
+
+
+def test_register_expects_only_body_fields():
+    from main import app
+
+    spec = app.openapi()["paths"]["/auth/register"]["post"]
+    assert spec.get("parameters", []) == []
+    schema = spec["requestBody"]["content"]["application/json"]["schema"]
+    assert "$ref" in schema  # RegisterRequest body — no query parameters

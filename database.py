@@ -1,3 +1,4 @@
+from fastapi import Request
 from sqlalchemy import Engine, event
 from sqlmodel import SQLModel, Session, create_engine
 
@@ -28,7 +29,7 @@ def create_tables(engine: Engine) -> None:
     SQLModel.metadata.create_all(engine)
 
 
-def get_session(request):
+def get_session(request: Request):
     """One session per request, from the engine owned by the app (or the tests)."""
     with Session(request.app.state.engine) as session:
         yield session

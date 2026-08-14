@@ -80,3 +80,10 @@
 - Full suite: 271 passed. README updated (structure, auth deps, permissions matrix, persistence, URL authority, testing section, 271 tests).
 - Deliberate behavior deltas (documented in README): single 401 body "Not authenticated" + WWW-Authenticate; unknown/malformed paths now 404 instead of 401; non-member requests hide existence uniformly ("Project not found"); URL lies → 404; `updated_at` now maintained by persistence listener.
 - Work left uncommitted for user review (per AGENTS.md). Venv was broken (pointed at another project's interpreter) → recreated; requirements.txt + pytest installed.
+
+## Fix: get_session request param leaked into OpenAPI (DONE)
+
+- `/auth/register` (and every DB route) exposed a required query parameter named `request` in the OpenAPI — `get_session(request)` had an UNANNOTATED param, so FastAPI treated it as a query param. Tests never caught it because conftest overrides `get_session`.
+- Fix: `get_session(request: Request)` in database.py.
+- Regression tests in test_security.py: no route may expose a `request` query param; /auth/register has zero parameters + a RegisterRequest body only.
+- Suite: 273 passed (271 + 2).
