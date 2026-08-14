@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from math import ceil
 from typing import Optional
 
@@ -6,39 +5,30 @@ from fastapi import HTTPException, status
 from sqlmodel import Session, select, func
 
 from models import Project, ProjectMember, ProjectMemberRole
-from services.permissions import get_membership_or_404, require_role
-
-OWNER = {ProjectMemberRole.owner}
-OWNER_OR_ADMIN = {ProjectMemberRole.owner, ProjectMemberRole.admin}
+from persistence import get_or_404, remove, save, transaction
+from services.permissions import Permission, authorize
 
 
 def create_project(
     name: str, description: Optional[str], owner_id: str, db: Session
 ) -> Project:
-    project = Project(name=name, description=description, owner_id=owner_id)
-    db.add(project)
-    db.flush()
+    with transaction(db):
+        project = Project(name=name, description=description, owner_id=owner_id)
+        db.add(project)
+        db.flush()
 
-    member = ProjectMember(
-        project_id=project.id,
-        user_id=owner_id,
-        role=ProjectMemberRole.owner,
-    )
-    db.add(member)
-    db.commit()
-    db.refresh(project)
+        member = ProjectMember(
+            project_id=project.id,
+            user_id=owner_id,
+            role=ProjectMemberRole.owner,
+        )
+        db.add(member)
     return project
 
 
 def get_project(project_id: str, user_id: str, db: Session) -> Project:
-    get_membership_or_404(db, project_id, user_id)
-    project = db.get(Project, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
-    return project
+    authorize(db, user_id, Permission.project_view, project_id)
+    return get_or_404(db, Project, project_id)
 
 
 def get_all_projects(
@@ -81,78 +71,35 @@ def get_all_projects(
 def update_project(
     project_id: str, user_id: str, update_data: dict, db: Session
 ) -> Project:
-    require_role(db, project_id, user_id, OWNER_OR_ADMIN)
-
-    project = db.get(Project, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    ctx = authorize(db, user_id, Permission.project_update, project_id)
 
     allowed_fields = {"name", "description", "status"}
     for field, value in update_data.items():
         if field in allowed_fields and value is not None:
-            setattr(project, field, value)
+            setattr(ctx.project, field, value)
 
-    project.updated_at = datetime.now(timezone.utc)
-    db.add(project)
-    db.commit()
-    db.refresh(project)
-    return project
+    return save(db, ctx.project)
 
 
 def delete_project(project_id: str, user_id: str, db: Session) -> None:
-    require_role(db, project_id, user_id, OWNER)
-
-    project = db.get(Project, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+    ctx = authorize(db, user_id, Permission.project_delete, project_id)
     # Related members, tasks and comments are removed via FK ON DELETE CASCADE
-    db.delete(project)
-    db.commit()
+    remove(db, ctx.project)
 
 
 def transfer_project(
     project_id: str, new_owner_id: str, user_id: str, db: Session
 ) -> Project:
-    actor_member = require_role(db, project_id, user_id, OWNER)
+    ctx = authorize(
+        db,
+        user_id,
+        Permission.project_transfer,
+        project_id,
+        subject_id=new_owner_id,
+    )
 
-    if new_owner_id == user_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User is already the project owner",
-        )
-
-    target_member = db.exec(
-        select(ProjectMember).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == new_owner_id,
-        )
-    ).first()
-    if not target_member:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User is not a project member",
-        )
-
-    project = db.get(Project, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
-
-    project.owner_id = new_owner_id
-    target_member.role = ProjectMemberRole.owner
-    actor_member.role = ProjectMemberRole.member
-    project.updated_at = datetime.now(timezone.utc)
-    db.add(project)
-    db.add(target_member)
-    db.add(actor_member)
-    db.commit()
-    db.refresh(project)
-    return project
+    with transaction(db):
+        ctx.project.owner_id = new_owner_id
+        ctx.subject.role = ProjectMemberRole.owner
+        ctx.actor.role = ProjectMemberRole.member
+    return ctx.project

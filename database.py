@@ -1,8 +1,7 @@
-from sqlalchemy import event
-from sqlmodel import SQLModel, create_engine, Session
-from config import DATABASE_URL
+from sqlalchemy import Engine, event
+from sqlmodel import SQLModel, Session, create_engine
 
-engine = create_engine(DATABASE_URL, echo=True, connect_args={"check_same_thread": False})
+from config import DATABASE_URL
 
 
 def _set_foreign_keys(dbapi_connection, connection_record):
@@ -11,16 +10,25 @@ def _set_foreign_keys(dbapi_connection, connection_record):
     cursor.close()
 
 
-def register_foreign_keys_listener(target_engine):
+def register_foreign_keys_listener(target_engine: Engine) -> None:
     event.listen(target_engine, "connect", _set_foreign_keys)
 
 
-register_foreign_keys_listener(engine)
+def make_engine(
+    url: str = DATABASE_URL, *, echo: bool = True
+) -> Engine:
+    engine = create_engine(
+        url, echo=echo, connect_args={"check_same_thread": False}
+    )
+    register_foreign_keys_listener(engine)
+    return engine
 
 
-def create_tables():
+def create_tables(engine: Engine) -> None:
     SQLModel.metadata.create_all(engine)
 
-def get_session():
-    with Session(engine) as session:
+
+def get_session(request):
+    """One session per request, from the engine owned by the app (or the tests)."""
+    with Session(request.app.state.engine) as session:
         yield session

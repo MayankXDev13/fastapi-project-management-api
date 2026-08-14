@@ -3,7 +3,7 @@ from sqlmodel import Session
 
 from database import get_session
 from deps import get_current_user
-from models import User
+from models import ProjectTaskComment, User
 from schemas.auth import MessageResponse
 from schemas.comment import (
     CommentResponse,
@@ -13,22 +13,11 @@ from schemas.comment import (
 from services.comment_service import (
     create_comment,
     delete_comment,
-    get_comments_for_task,
     update_comment,
 )
+from services.scope import TASK_SCOPE, scoped_list
 
 router = APIRouter(prefix="/projects/{project_id}/tasks/{task_id}/comments", tags=["comments"])
-
-
-def _to_response(comment) -> CommentResponse:
-    return CommentResponse(
-        id=comment.id,
-        task_id=comment.task_id,
-        user_id=comment.user_id,
-        comment=comment.comment,
-        created_at=comment.created_at,
-        updated_at=comment.updated_at,
-    )
 
 
 @router.post("", response_model=CommentResponse, status_code=201)
@@ -39,12 +28,8 @@ def create_comment_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    comment = create_comment(
-        {"task_id": task_id, "user_id": current_user.id, "comment": body.comment},
-        current_user.id,
-        db,
-    )
-    return _to_response(comment)
+    comment = create_comment(project_id, task_id, body, current_user.id, db)
+    return CommentResponse.model_validate(comment)
 
 
 @router.get("", response_model=list[CommentResponse])
@@ -54,7 +39,15 @@ def list_comments(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    return [_to_response(comment) for comment in get_comments_for_task(task_id, current_user.id, db)]
+    comments = scoped_list(
+        db,
+        ProjectTaskComment,
+        current_user.id,
+        TASK_SCOPE,
+        project_id=project_id,
+        task_id=task_id,
+    )
+    return [CommentResponse.model_validate(comment) for comment in comments]
 
 
 @router.put("/{comment_id}", response_model=CommentResponse)
@@ -66,8 +59,10 @@ def update_comment_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    comment = update_comment(comment_id, current_user.id, body.model_dump(exclude_unset=True), db)
-    return _to_response(comment)
+    comment = update_comment(
+        project_id, task_id, comment_id, body, current_user.id, db
+    )
+    return CommentResponse.model_validate(comment)
 
 
 @router.delete("/{comment_id}", response_model=MessageResponse)
@@ -78,5 +73,5 @@ def delete_comment_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    delete_comment(comment_id, current_user.id, db)
+    delete_comment(project_id, task_id, comment_id, current_user.id, db)
     return MessageResponse(message="Comment deleted successfully")

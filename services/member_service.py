@@ -1,21 +1,18 @@
-from datetime import datetime, timezone
-
 from fastapi import HTTPException, status
 from sqlmodel import Session, select, update
 
 from models import ProjectMember, ProjectMemberRole, ProjectTask
-from services.permissions import get_membership_or_404, require_role
-
-OWNER_OR_ADMIN = {ProjectMemberRole.owner, ProjectMemberRole.admin}
+from persistence import remove, save
+from services.permissions import Permission, authorize
+from services.scope import PROJECT_SCOPE, scoped_list
 
 
 def get_project_members(
     project_id: str, user_id: str, db: Session
 ) -> list[ProjectMember]:
-    get_membership_or_404(db, project_id, user_id)
-    return db.exec(
-        select(ProjectMember).where(ProjectMember.project_id == project_id)
-    ).all()
+    return scoped_list(
+        db, ProjectMember, user_id, PROJECT_SCOPE, project_id=project_id
+    )
 
 
 def add_member_to_project(
@@ -25,13 +22,14 @@ def add_member_to_project(
     db: Session,
     role: ProjectMemberRole = ProjectMemberRole.member,
 ) -> ProjectMember:
-    require_role(db, project_id, actor_id, OWNER_OR_ADMIN)
-
-    if role == ProjectMemberRole.owner:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Owner role can only be granted via project transfer",
-        )
+    authorize(
+        db,
+        actor_id,
+        Permission.member_add,
+        project_id,
+        subject_id=user_id,
+        role=role,
+    )
 
     existing = db.exec(
         select(ProjectMember).where(
@@ -45,11 +43,7 @@ def add_member_to_project(
             detail="User is already a project member",
         )
 
-    member = ProjectMember(project_id=project_id, user_id=user_id, role=role)
-    db.add(member)
-    db.commit()
-    db.refresh(member)
-    return member
+    return save(db, ProjectMember(project_id=project_id, user_id=user_id, role=role))
 
 
 def update_member_role(
@@ -59,62 +53,29 @@ def update_member_role(
     new_role: ProjectMemberRole | str,
     db: Session,
 ) -> ProjectMember:
-    require_role(db, project_id, actor_id, OWNER_OR_ADMIN)
+    ctx = authorize(
+        db,
+        actor_id,
+        Permission.member_role_update,
+        project_id,
+        subject_id=target_user_id,
+        role=new_role,
+    )
 
-    member = db.exec(
-        select(ProjectMember).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == target_user_id,
-        )
-    ).first()
-    if not member:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project member not found",
-        )
-
-    if member.role == ProjectMemberRole.owner:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Owner role can only be changed via project transfer",
-        )
-
-    new_role = ProjectMemberRole(new_role) if isinstance(new_role, str) else new_role
-    if new_role == ProjectMemberRole.owner:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Owner role can only be granted via project transfer",
-        )
-
-    member.role = new_role
-    member.updated_at = datetime.now(timezone.utc)
-    db.add(member)
-    db.commit()
-    db.refresh(member)
-    return member
+    ctx.subject.role = ProjectMemberRole(new_role) if isinstance(new_role, str) else new_role
+    return save(db, ctx.subject)
 
 
 def remove_member_from_project(
     project_id: str, target_user_id: str, actor_id: str, db: Session
 ) -> None:
-    require_role(db, project_id, actor_id, OWNER_OR_ADMIN)
-
-    member = db.exec(
-        select(ProjectMember).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == target_user_id,
-        )
-    ).first()
-    if not member:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project member not found",
-        )
-    if member.role == ProjectMemberRole.owner:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Owner cannot be removed; transfer ownership first",
-        )
+    ctx = authorize(
+        db,
+        actor_id,
+        Permission.member_remove,
+        project_id,
+        subject_id=target_user_id,
+    )
 
     db.exec(
         update(ProjectTask)
@@ -124,5 +85,4 @@ def remove_member_from_project(
         )
         .values(assigned_to=None)
     )
-    db.delete(member)
-    db.commit()
+    remove(db, ctx.subject)

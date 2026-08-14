@@ -16,8 +16,6 @@ from fastapi.testclient import TestClient
 from sqlmodel import SQLModel, Session, create_engine
 from sqlalchemy.pool import StaticPool
 
-import database
-import middleware.auth_middleware
 from database import register_foreign_keys_listener
 
 
@@ -30,22 +28,12 @@ def engine():
         echo=False,
     )
     register_foreign_keys_listener(test_engine)
-    # Save originals to restore
-    orig_db_engine = database.engine
-    orig_mw_engine = middleware.auth_middleware.engine
-
-    # Patch both references (database.engine and middleware's imported engine)
-    database.engine = test_engine
-    middleware.auth_middleware.engine = test_engine
-
     SQLModel.metadata.create_all(test_engine)
 
     yield test_engine
 
     SQLModel.metadata.drop_all(test_engine)
     test_engine.dispose()
-    database.engine = orig_db_engine
-    middleware.auth_middleware.engine = orig_mw_engine
 
 
 @pytest.fixture()
@@ -54,11 +42,25 @@ def db_session(engine):
         yield session
 
 
+class FakeMailer:
+    """Captures raw verification tokens delivered via the get_mailer seam."""
+
+    def __init__(self):
+        self.sent: list[dict] = []
+
+    def __call__(self, *, to, token_type, raw_token):
+        self.sent.append(
+            {"to": to, "token_type": token_type, "raw_token": raw_token}
+        )
+
+
 @pytest.fixture()
 def client(engine):
-    """TestClient with overridden get_session dependency."""
+    """TestClient with a test engine on app.state + overridden get_session."""
     from main import app
     from database import get_session
+
+    app.state.engine = engine
 
     def _get_session_override():
         with Session(engine) as session:
@@ -70,6 +72,18 @@ def client(engine):
         yield c
 
     app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def mailer(client):
+    """Installs a FakeMailer as the get_mailer dependency; yields the fake."""
+    from main import app
+    from deps import get_mailer
+
+    fake = FakeMailer()
+    app.dependency_overrides[get_mailer] = lambda: fake
+    yield fake
+    app.dependency_overrides.pop(get_mailer, None)
 
 
 # ---------------------------------------------------------------------------

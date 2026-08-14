@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from models import ProjectMemberRole
+from schemas.base import APIResponse
 
 
 class AddMemberRequest(BaseModel):
@@ -14,7 +15,7 @@ class UpdateMemberRoleRequest(BaseModel):
     new_role: ProjectMemberRole
 
 
-class MemberResponse(BaseModel):
+class MemberResponse(APIResponse):
     id: str
     project_id: str
     user_id: str
@@ -22,7 +23,3 @@ class MemberResponse(BaseModel):
     joined_at: datetime
     created_at: datetime
     updated_at: datetime
-
-
-class MemberListResponse(BaseModel):
-    items: list[MemberResponse]

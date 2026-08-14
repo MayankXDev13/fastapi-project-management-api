@@ -4,6 +4,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from models import ProjectStatus
+from schemas.base import APIResponse
 
 
 class CreateProjectRequest(BaseModel):
@@ -21,7 +22,7 @@ class TransferProjectRequest(BaseModel):
     user_id: str
 
 
-class ProjectResponse(BaseModel):
+class ProjectResponse(APIResponse):
     id: str
     name: str
     description: Optional[str] = None
@@ -29,11 +30,3 @@ class ProjectResponse(BaseModel):
     owner_id: str
     created_at: datetime
     updated_at: datetime
-
-
-class PaginatedProjectResponse(BaseModel):
-    items: list[ProjectResponse]
-    total: int
-    page: int
-    page_size: int
-    total_pages: int

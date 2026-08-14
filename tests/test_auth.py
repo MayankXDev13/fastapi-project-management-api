@@ -3,7 +3,6 @@ Integration tests for /auth routes + AuthMiddleware via TestClient.
 Uses in-memory SQLite (conftest engine) and real JWT flow.
 """
 import datetime
-from unittest.mock import patch
 
 import pytest
 from sqlmodel import select
@@ -154,55 +153,33 @@ class TestLogout:
 # ---------------------------------------------------------------------------
 
 class TestVerifyEmail:
-    def test_verify_email_success(self, client, db_session):
-        # register and grab raw token via service helper interception
-        with patch("services.auth_service.send_email") as mock_email:
-            client.post("/auth/register", json={"email": "u@b.com", "password": "pass123"})
-            # send_email called with body containing raw token
-            body = mock_email.call_args.kwargs.get("body") or mock_email.call_args[0][2] if mock_email.call_args else ""
-            # fallback: query token then reconstruct raw is not possible (hash only stored)
-            # Instead verify via DB lookup: fetch token_hash then test invalid vs valid
-            pass
+    def test_verify_email_success(self, client, mailer, db_session):
+        # register → the mailer seam captures the raw verification token
+        resp = client.post("/auth/register", json={"email": "u@b.com", "password": "pass123"})
+        assert resp.status_code == 201
+        assert len(mailer.sent) == 1
+        assert mailer.sent[0]["to"] == "u@b.com"
+        raw = mailer.sent[0]["raw_token"]
+        assert raw
 
-        # Proper path: query DB for verification token, then brute: we can't recover raw token
-        # So test via direct DB insertion of known token
+        # only the hash is stored — raw is unrecoverable from the DB
         user = db_session.exec(select(User).where(User.email == "u@b.com")).first()
-        from utils.auth import generate_raw_token
-        raw = generate_raw_token()
-        tok = VerificationToken(
-            user_id=user.id,
-            token_hash=hash_token(raw),
-            type=VerificationTokenType.email_verification,
-            expires_at=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1),
-        )
-        db_session.add(tok)
-        db_session.commit()
+        assert user.is_email_verified is False
 
         resp = client.post("/auth/verify-email", json={"token": raw})
         assert resp.status_code == 200
+
         db_session.refresh(user)
-        # reload user
-        user2 = db_session.get(User, user.id)
-        assert user2.is_email_verified is True
+        assert user.is_email_verified is True
 
     def test_verify_email_invalid_token_400(self, client):
         resp = client.post("/auth/verify-email", json={"token": "bad-token"})
         assert resp.status_code == 400
 
-    def test_verify_email_reuse_fails(self, client, db_session):
+    def test_verify_email_reuse_fails(self, client, mailer):
         client.post("/auth/register", json={"email": "u@b.com", "password": "pass123"})
-        user = db_session.exec(select(User).where(User.email == "u@b.com")).first()
-        from utils.auth import generate_raw_token
-        raw = generate_raw_token()
-        tok = VerificationToken(
-            user_id=user.id,
-            token_hash=hash_token(raw),
-            type=VerificationTokenType.email_verification,
-            expires_at=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1),
-        )
-        db_session.add(tok)
-        db_session.commit()
-        client.post("/auth/verify-email", json={"token": raw})
+        raw = mailer.sent[0]["raw_token"]
+        assert client.post("/auth/verify-email", json={"token": raw}).status_code == 200
         resp = client.post("/auth/verify-email", json={"token": raw})
         assert resp.status_code == 400
 
@@ -212,16 +189,31 @@ class TestVerifyEmail:
 # ---------------------------------------------------------------------------
 
 class TestForgotResetPassword:
-    def test_forgot_password_existing_user_200(self, client):
+    def test_forgot_password_existing_user_200(self, client, mailer):
         client.post("/auth/register", json={"email": "u@b.com", "password": "pass123"})
+        before = len(mailer.sent)
         resp = client.post("/auth/forgot-password", json={"email": "u@b.com"})
         assert resp.status_code == 200
         assert "reset link" in resp.json()["message"].lower()
+        assert len(mailer.sent) == before + 1
 
-    def test_forgot_password_nonexistent_user_still_200(self, client):
-        # should not leak existence
+    def test_forgot_password_nonexistent_user_still_200(self, client, mailer):
+        # should not leak existence — no mail is sent
         resp = client.post("/auth/forgot-password", json={"email": "no@b.com"})
         assert resp.status_code == 200
+        assert mailer.sent == []
+
+    def test_reset_password_full_lifecycle(self, client, mailer):
+        client.post("/auth/register", json={"email": "u@b.com", "password": "pass123"})
+        client.post("/auth/forgot-password", json={"email": "u@b.com"})
+        raw = mailer.sent[-1]["raw_token"]
+        assert raw
+
+        resp = client.post("/auth/reset-password", json={"token": raw, "new_password": "newpass123"})
+        assert resp.status_code == 200
+        # new password works, old fails
+        assert client.post("/auth/login", json={"email": "u@b.com", "password": "newpass123"}).status_code == 200
+        assert client.post("/auth/login", json={"email": "u@b.com", "password": "pass123"}).status_code == 401
 
     def test_reset_password_success(self, client, db_session):
         client.post("/auth/register", json={"email": "u@b.com", "password": "pass123"})

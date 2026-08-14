@@ -13,10 +13,11 @@ A clean, production-ready **Project / Task Management REST API** (mini Jira / As
 - **Tasks**: CRUD under `/projects/{projectId}/tasks` with status `todo | in_progress | review | completed`
 - **Comments**: CRUD under `/projects/{projectId}/tasks/{taskId}/comments`
 - **Members**: list / add / update role (`owner|admin|member|viewer`) / remove under `/projects/{projectId}/members`
-- **Authorization**: project-scoped roles enforced in services — non-members get `404`, members without the role get `403` (see [Permissions](#permissions))
-- **Middleware**: `AuthMiddleware` (Bearer JWT) with public paths bypass
-- **Emails**: via [Resend](https://resend.com) with stub fallback (`[EMAIL STUB]` when `RESEND_API_KEY` missing)
-- **Tests**: 150+ pytest integration + unit tests with in-memory SQLite
+- **Authorization**: project-scoped roles enforced via a declarative permission matrix in `services/permissions.py` — non-members get `404`, members without the role get `403` (see [Permissions](#permissions))
+- **URL authority**: every nested resource is validated against the URL (`services/scope.py`) — the path can't be lied to; mismatches are uniform `404`s
+- **Auth**: FastAPI dependencies (`deps.authenticate`/`get_current_user`) + router-level guards — no middleware
+- **Emails**: `services/emailer.py` `Mailer` seam (Resend + stub fallback `[EMAIL STUB]` when `RESEND_API_KEY` missing), injectable for tests
+- **Tests**: 270+ pytest integration + unit tests with in-memory SQLite
 
 ---
 
@@ -24,13 +25,12 @@ A clean, production-ready **Project / Task Management REST API** (mini Jira / As
 
 ```
 .
-├── main.py                 # FastAPI app, middleware, routers, startup
+├── main.py                 # FastAPI app, lifespan (app.state.engine), routers
 ├── config.py               # env: DATABASE_URL, SECRET_KEY, JWT expiry, Resend
-├── database.py             # SQLModel engine + get_session + create_tables
-├── deps.py                 # get_current_user (from request.state.user)
+├── database.py             # make_engine + get_session(request) + create_tables
+├── persistence.py          # save/remove/transaction/get_or_404 + updated_at listener
+├── deps.py                 # authenticate + get_current_user (401) + get_mailer
 ├── models.py               # SQLModel tables + Enums
-├── middleware/
-│   └── auth_middleware.py  # BaseHTTPMiddleware — validates Bearer JWT
 ├── routes/                 # APIRouter thin layer → schemas ↔ services
 │   ├── auth.py
 │   ├── project.py
@@ -38,6 +38,7 @@ A clean, production-ready **Project / Task Management REST API** (mini Jira / As
 │   ├── comment.py
 │   └── member.py
 ├── schemas/                # Pydantic Request/Response models
+│   ├── base.py             # APIResponse (from_attributes), Page[T], build_entity
 │   ├── auth.py
 │   ├── project.py
 │   ├── task.py
@@ -49,7 +50,9 @@ A clean, production-ready **Project / Task Management REST API** (mini Jira / As
 │   ├── task_service.py
 │   ├── comment_service.py
 │   ├── member_service.py
-│   ├── permissions.py      # get_membership_or_404 / require_role helpers
+│   ├── permissions.py      # Permission enum + rule matrix + authorize/can
+│   ├── scope.py            # scoped_get / scoped_list (URL = authority)
+│   ├── emailer.py          # Mailer protocol + resend_mailer
 │   └── user_service.py     # delete_user_cascade (ownership fallback helper)
 ├── utils/
 │   └── auth.py             # bcrypt, JWT (access), sha256 token hashing
@@ -61,7 +64,8 @@ A clean, production-ready **Project / Task Management REST API** (mini Jira / As
 │   ├── test_tasks.py
 │   ├── test_comments.py
 │   ├── test_members.py
-│   └── test_permissions.py
+│   ├── test_permissions.py
+│   └── test_security.py    # route audit: every protected route resolves get_current_user
 ├── requirements.txt
 └── .env
 ```
@@ -138,13 +142,15 @@ Forgot   → if user exists: VerificationToken(password_reset, 1h) → send_emai
 Reset    → validate password_reset token → hash_password(new)
 ```
 
-**Middleware** (`middleware/auth_middleware.py`):
+**Authentication** (`deps.py`):
 
-- Public paths bypass auth: `/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/verify-email`, `/auth/forgot-password`, `/auth/reset-password`, `/docs`, `/openapi.json`, `/redoc`
-- All other paths require `Authorization: Bearer <jwt>` → `decode_token()` → lookup `User` → `request.state.user`
-- `deps.get_current_user` raises `401` if missing
+- Public routes: `/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/verify-email`, `/auth/forgot-password`, `/auth/reset-password`, `/docs`, `/openapi.json`, `/redoc`
+- All other routes require `Authorization: Bearer <jwt>` — enforced per-route via `Depends(get_current_user)` (router-level on project/task/comment/member routers). `deps.authenticate` decodes the token and loads the `User`; `get_current_user` raises `401 {detail: "Not authenticated"}` with `WWW-Authenticate: Bearer` when it fails
+- `tests/test_security.py` audits that every non-public route resolves `get_current_user` (a forgotten dependency fails the suite, not just the deploy)
 
 **Token helpers** (`utils/auth.py`): `hash_password`/`verify_password` (bcrypt), `create_access_token`/`decode_token` (PyJWT), `generate_raw_token` (`token_hex(32)`), `hash_token` (`sha256`).
+
+**Persistence** (`persistence.py`): `save`/`remove`/`flush_add`/`transaction` (commit-on-success, rollback on any exception, nesting joins the outer unit), `get_or_404`/`first_or_404`/`first_or_raise`. `updated_at` is stamped automatically on every insert/update by a `before_flush` listener — no service touches it.
 
 ---
 
@@ -212,13 +218,19 @@ List is scoped to `ProjectMember` where `user_id == current_user.id`, paginated 
 | PUT | `/projects/{projectId}/members/{userId}` | Yes | `{new_role}` | `200 MemberResponse` / `404` |
 | DELETE | `/projects/{projectId}/members/{userId}` | Yes | — | `200 MessageResponse` / `404` |
 
-All non-public routes return `401 {detail: "Not authenticated"}` or `401 {detail: "Invalid or expired token"}` when `Authorization` is missing/invalid.
+All protected routes return `401 {detail: "Not authenticated"}` when `Authorization` is missing/invalid. Unknown paths return `404` (auth no longer preempts routing).
+
+## Permissions
+
+Roles are **project-scoped** (stored on `project_members`). Identity comes from `deps.get_current_user`; authorization lives in `services/permissions.py` — a `Permission` enum backed by a rule matrix, exposed through `authorize()` (raises the canonical `404`/`403`/`400`) and `can()` (boolean).
+
+Every task/comment/member read or write first resolves through `services/scope.py` (`scoped_get`/`scoped_list`): the row must live under the URL's project (and task), and the actor must be a member of the URL project — otherwise a uniform `404` (`"Project not found"` for non-members, hiding the resource's existence).
 
 ---
 
 ## Permissions
 
-Roles are **project-scoped** (stored on `project_members`). Authentication lives in `AuthMiddleware` (identity); authorization lives in services via `services/permissions.py` (`get_membership_or_404`, `require_role`).
+Roles are **project-scoped** (stored on `project_members`). Authentication lives in `deps.py` (identity); authorization lives in services via `services/permissions.py` (`authorize` over the `Permission` matrix).
 
 | Action | owner | admin | member | viewer | non-member |
 |---|---|---|---|---|---|
@@ -282,7 +294,7 @@ curl -X POST http://localhost:8000/auth/refresh \
 
 ## Testing
 
-In-memory SQLite + real JWT via `TestClient`. No file DB is touched; `database.engine` and `middleware.auth_middleware.engine` are patched per test with `StaticPool`.
+In-memory SQLite + real JWT via `TestClient`. No file DB is touched: the `client` fixture puts a `StaticPool` engine on `app.state.engine` and overrides `get_session`; a `FakeMailer` overrides `get_mailer` to capture raw verification tokens.
 
 ```bash
 pip install pytest httpx pytest-asyncio   # if not already
@@ -291,19 +303,24 @@ pytest tests/test_auth.py -v
 pytest -q --tb=short
 ```
 
-**Suite** (`153 tests`):
+**Suite** (`271 tests`):
 
 | File | Coverage |
 |---|---|
 | `tests/test_utils_auth.py` | `hash_password`, `verify_password`, `create_access_token`/`decode_token`, expiry, tamper, `generate_raw_token`, `hash_token` |
-| `tests/test_auth.py` | register (201/409/token), login (200/401), refresh (rotation/reuse/expired/invalid), logout, verify-email (success/reuse/invalid), forgot/reset (leak-safe, success, invalid, reuse), `GET/PUT /auth/me`, `change-password`, middleware (`Bearer` prefix, public paths) |
+| `tests/test_auth.py` | register (201/409/token), login (200/401), refresh (rotation/reuse/expired/invalid), logout, verify-email (success/reuse/invalid), forgot/reset (leak-safe, mailer lifecycle, success, invalid, reuse), `GET/PUT /auth/me`, `change-password`, auth guards (`Bearer` prefix, public paths) |
 | `tests/test_projects.py` | create (success/no-desc/401/owner-member), list (empty/pagination/search by name+desc/case-insensitive/scoping/401), get/update/delete (success/404/partial/401) |
 | `tests/test_tasks.py` | create (success/with assignee/401/422), list/get (empty/401/404), update/delete (success/partial/404/401) |
 | `tests/test_comments.py` | create/list/update/delete (success/404/401/422) |
 | `tests/test_members.py` | list (owner/401), add (success/default role/duplicate 409/roles), update role (success/404/401), remove (success/404/401) |
-| `tests/test_permissions.py` | non-member `404` hiding, role matrix per endpoint (403/200), task assignment rules, unassign via `null`, cascade deletes, member-removal unassignment, transfer (success/roles/403/404/400), owner immutability, `delete_user_cascade` units |
+| `tests/test_permissions.py` | non-member `404` hiding, role matrix per endpoint (403/200), task assignment rules, unassign via `null`, cascade deletes, member-removal unassignment, transfer (success/roles/403/404/400), owner immutability, `delete_user_cascade` units, URL-authority lies |
+| `tests/test_permissions_policy.py` | `authorize` unit matrix: min-role boundaries, 404 hiding, assignee rule, comment author bypass, member/transfer rules, `can()`, `pick_successor` |
+| `tests/test_persistence.py` | `get_or_404`/`first_or_404`/`first_or_raise`, `save`/`remove`/`flush_add`, `transaction` (commit/rollback/nesting/engine mode), `updated_at` listener |
+| `tests/test_utils_scope.py` | `scoped_get`/`scoped_list` happy paths, missing resources, URL-lie 404s, task-scope proof, limit/offset |
+| `tests/test_deps.py` / `test_security.py` | `authenticate` units, 401 + `WWW-Authenticate`, logout requires auth, route audit |
+| `tests/test_response_contract.py` | schema↔column drift guard, `from_attributes` wiring, `build_entity`, `Page` |
 
-Fixtures (`tests/conftest.py`): `engine`, `db_session`, `client` (+ helpers `register_user`, `login_user`, `auth_headers`, `create_project`).
+Fixtures (`tests/conftest.py`): `engine`, `db_session`, `client`, `mailer` (+ helpers `register_user`, `login_user`, `auth_headers`, `create_project`).
 
 ---
 

@@ -1,9 +1,10 @@
 from datetime import datetime
 from pydantic import BaseModel
 
+from schemas.base import APIResponse
+
 
 class CreateCommentRequest(BaseModel):
-    task_id: str
     comment: str
 
 
@@ -11,14 +12,10 @@ class UpdateCommentRequest(BaseModel):
     comment: str
 
 
-class CommentResponse(BaseModel):
+class CommentResponse(APIResponse):
     id: str
     task_id: str
     user_id: str
     comment: str
     created_at: datetime
     updated_at: datetime
-
-
-class CommentListResponse(BaseModel):
-    items: list[CommentResponse]

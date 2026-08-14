@@ -633,3 +633,96 @@ class TestDeleteUserCascade:
     def test_unknown_user_is_noop(self, db_session):
         from services.user_service import delete_user_cascade
         delete_user_cascade("does-not-exist", db_session)
+
+
+# ---------------------------------------------------------------------------
+# URL authority: the path, not the resource, decides the project/task
+# ---------------------------------------------------------------------------
+
+class TestUrlAuthority:
+    """A user member of BOTH projects cannot reach project A's resources via
+    project B's URL (and vice versa)."""
+
+    def test_get_task_via_wrong_project_url_404(self, client):
+        pid_a, roles_a = _setup_project(client)
+        pid_b, roles_b = _setup_project(client, member_count=1)
+        # user member of BOTH projects
+        both = _user(client, _email("both"))
+        r = client.post(
+            f"/projects/{pid_a}/members",
+            json={"user_id": both["id"], "role": "admin"},
+            headers=roles_a["owner"]["headers"],
+        )
+        assert r.status_code == 201, r.text
+        r = client.post(
+            f"/projects/{pid_b}/members",
+            json={"user_id": both["id"], "role": "admin"},
+            headers=roles_b["owner"]["headers"],
+        )
+        assert r.status_code == 201, r.text
+
+        task_a = _create_task(client, pid_a, roles_a["owner"]["headers"])
+        # task_a exists and 'both' is a member of pid_b — URL lies about the project
+        resp = client.get(f"/projects/{pid_b}/tasks/{task_a}", headers=both["headers"])
+        assert resp.status_code == 404
+
+    def test_update_task_via_wrong_project_url_404(self, client):
+        pid_a, roles_a = _setup_project(client)
+        pid_b, _ = _setup_project(client, member_count=1)
+        task_a = _create_task(client, pid_a, roles_a["owner"]["headers"])
+        resp = client.put(
+            f"/projects/{pid_b}/tasks/{task_a}",
+            json={"title": "hijacked"},
+            headers=roles_a["owner"]["headers"],
+        )
+        assert resp.status_code == 404
+
+    def test_list_comments_via_wrong_task_url_404(self, client):
+        pid_a, roles_a = _setup_project(client)
+        task_a = _create_task(client, pid_a, roles_a["owner"]["headers"])
+        task_b = _create_task(client, pid_a, roles_a["owner"]["headers"])
+        resp = client.get(
+            f"/projects/{pid_a}/tasks/{task_b}/comments", headers=roles_a["owner"]["headers"]
+        )
+        assert resp.status_code == 200
+        resp = client.get(
+            f"/projects/{pid_a}/tasks/{task_a}/comments", headers=roles_a["owner"]["headers"]
+        )
+        assert resp.status_code == 200
+
+    def test_comment_via_wrong_task_url_404(self, client):
+        pid_a, roles_a = _setup_project(client)
+        task_a = _create_task(client, pid_a, roles_a["owner"]["headers"])
+        task_b = _create_task(client, pid_a, roles_a["owner"]["headers"])
+        comment = client.post(
+            f"/projects/{pid_a}/tasks/{task_a}/comments",
+            json={"comment": "hi"},
+            headers=roles_a["owner"]["headers"],
+        ).json()
+        resp = client.put(
+            f"/projects/{pid_a}/tasks/{task_b}/comments/{comment['id']}",
+            json={"comment": "hijacked"},
+            headers=roles_a["owner"]["headers"],
+        )
+        assert resp.status_code == 404
+        resp = client.delete(
+            f"/projects/{pid_a}/tasks/{task_b}/comments/{comment['id']}",
+            headers=roles_a["owner"]["headers"],
+        )
+        assert resp.status_code == 404
+
+    def test_comment_via_wrong_project_url_404(self, client):
+        pid_a, roles_a = _setup_project(client)
+        pid_b, _ = _setup_project(client, member_count=1)
+        task_a = _create_task(client, pid_a, roles_a["owner"]["headers"])
+        comment = client.post(
+            f"/projects/{pid_a}/tasks/{task_a}/comments",
+            json={"comment": "hi"},
+            headers=roles_a["owner"]["headers"],
+        ).json()
+        resp = client.put(
+            f"/projects/{pid_b}/tasks/{task_a}/comments/{comment['id']}",
+            json={"comment": "hijacked"},
+            headers=roles_a["owner"]["headers"],
+        )
+        assert resp.status_code == 404

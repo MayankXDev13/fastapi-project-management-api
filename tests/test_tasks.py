@@ -115,7 +115,7 @@ class TestTaskUpdateDelete:
         assert resp.status_code == 404
 
     def test_update_delete_require_auth(self, client):
-        resp = client.put("/projects/p/t/tasks/tid", json={"title": "X"})
+        resp = client.put("/projects/p/tasks/tid", json={"title": "X"})
         assert resp.status_code == 401
-        resp = client.delete("/projects/p/t/tasks/tid")
+        resp = client.delete("/projects/p/tasks/tid")
         assert resp.status_code == 401

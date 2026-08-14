@@ -1,85 +1,88 @@
-from datetime import datetime, timezone
-from typing import Any
+from sqlmodel import Session
 
-from fastapi import HTTPException, status
-from sqlmodel import Session, select
-
-from models import ProjectMemberRole, ProjectTask, ProjectTaskComment
-from services.permissions import get_membership_or_404, require_role
-
-OWNER_OR_ADMIN = {ProjectMemberRole.owner, ProjectMemberRole.admin}
-NON_VIEWER = {ProjectMemberRole.owner, ProjectMemberRole.admin, ProjectMemberRole.member}
-
-
-def _can_manage_comment(
-    comment: ProjectTaskComment, user_id: str, db: Session
-) -> None:
-    if comment.user_id == user_id:
-        return
-    require_role(db, comment.task.project_id, user_id, OWNER_OR_ADMIN)
+from models import ProjectTask, ProjectTaskComment
+from persistence import remove, save
+from schemas.base import build_entity
+from schemas.comment import CreateCommentRequest, UpdateCommentRequest
+from services.permissions import Permission, authorize
+from services.scope import PROJECT_SCOPE, TASK_SCOPE, scoped_get
 
 
 def create_comment(
-    comment_data: dict[str, Any], user_id: str, db: Session
+    project_id: str,
+    task_id: str,
+    body: CreateCommentRequest,
+    user_id: str,
+    db: Session,
 ) -> ProjectTaskComment:
-    task = db.get(ProjectTask, comment_data["task_id"])
-    if not task:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found",
-        )
-    require_role(db, task.project_id, user_id, NON_VIEWER)
+    task = scoped_get(
+        db, ProjectTask, task_id, user_id, PROJECT_SCOPE, project_id=project_id
+    )
+    authorize(db, user_id, Permission.comment_create, project_id)
 
-    comment = ProjectTaskComment(**comment_data)
-    db.add(comment)
-    db.commit()
-    db.refresh(comment)
-    return comment
-
-
-def get_comments_for_task(
-    task_id: str, user_id: str, db: Session
-) -> list[ProjectTaskComment]:
-    task = db.get(ProjectTask, task_id)
-    if not task:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found",
-        )
-    get_membership_or_404(db, task.project_id, user_id)
-    return db.exec(
-        select(ProjectTaskComment).where(ProjectTaskComment.task_id == task_id)
-    ).all()
+    return save(
+        db,
+        build_entity(
+            ProjectTaskComment,
+            body,
+            task_id=task.id,
+            user_id=user_id,
+        ),
+    )
 
 
 def update_comment(
-    comment_id: str, user_id: str, updated_data: dict[str, Any], db: Session
+    project_id: str,
+    task_id: str,
+    comment_id: str,
+    body: UpdateCommentRequest,
+    user_id: str,
+    db: Session,
 ) -> ProjectTaskComment:
-    comment = db.get(ProjectTaskComment, comment_id)
-    if not comment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Comment not found",
-        )
-    _can_manage_comment(comment, user_id, db)
+    comment = scoped_get(
+        db,
+        ProjectTaskComment,
+        comment_id,
+        user_id,
+        TASK_SCOPE,
+        project_id=project_id,
+        task_id=task_id,
+    )
+    authorize(
+        db,
+        user_id,
+        Permission.comment_update,
+        project_id,
+        subject_id=comment.user_id,
+    )
 
-    if "comment" in updated_data and updated_data["comment"] is not None:
-        comment.comment = updated_data["comment"]
+    if body.comment is not None:
+        comment.comment = body.comment
 
-    comment.updated_at = datetime.now(timezone.utc)
-    db.add(comment)
-    db.commit()
-    db.refresh(comment)
-    return comment
+    return save(db, comment)
 
 
-def delete_comment(comment_id: str, user_id: str, db: Session) -> None:
-    comment = db.get(ProjectTaskComment, comment_id)
-    if not comment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Comment not found",
-        )
-    _can_manage_comment(comment, user_id, db)
-    db.delete(comment)
-    db.commit()
+def delete_comment(
+    project_id: str,
+    task_id: str,
+    comment_id: str,
+    user_id: str,
+    db: Session,
+) -> None:
+    comment = scoped_get(
+        db,
+        ProjectTaskComment,
+        comment_id,
+        user_id,
+        TASK_SCOPE,
+        project_id=project_id,
+        task_id=task_id,
+    )
+    authorize(
+        db,
+        user_id,
+        Permission.comment_delete,
+        project_id,
+        subject_id=comment.user_id,
+    )
+    remove(db, comment)

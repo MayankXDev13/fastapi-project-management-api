@@ -3,6 +3,8 @@ from typing import Optional
 
 from pydantic import BaseModel, EmailStr
 
+from schemas.base import APIResponse
+
 
 class RegisterRequest(BaseModel):
     email: str
@@ -50,7 +52,7 @@ class TokenResponse(BaseModel):
     token_type: str
 
 
-class UserResponse(BaseModel):
+class UserResponse(APIResponse):
     id: str
     email: str
     is_email_verified: bool

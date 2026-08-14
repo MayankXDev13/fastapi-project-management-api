@@ -4,10 +4,10 @@ from typing import Optional
 from pydantic import BaseModel
 
 from models import TaskStatus
+from schemas.base import APIResponse
 
 
 class CreateTaskRequest(BaseModel):
-    project_id: str
     title: str
     description: Optional[str] = None
     assigned_to: Optional[str] = None
@@ -23,7 +23,7 @@ class UpdateTaskRequest(BaseModel):
     status: Optional[TaskStatus] = None
 
 
-class TaskResponse(BaseModel):
+class TaskResponse(APIResponse):
     id: str
     project_id: str
     title: str
@@ -34,7 +34,3 @@ class TaskResponse(BaseModel):
     status: TaskStatus
     created_at: datetime
     updated_at: datetime
-
-
-class TaskListResponse(BaseModel):
-    items: list[TaskResponse]
